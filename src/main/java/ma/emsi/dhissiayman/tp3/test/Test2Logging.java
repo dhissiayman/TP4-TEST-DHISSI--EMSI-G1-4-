@@ -1,5 +1,6 @@
 package ma.emsi.dhissiayman.tp3.test;
 
+
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentParser;
 import dev.langchain4j.data.document.loader.FileSystemDocumentLoader;
@@ -19,6 +20,10 @@ import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.service.AiServices;
 import ma.emsi.dhissiayman.tp3.assistant.Assistant;
+import java.util.logging.ConsoleHandler;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
 
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -27,9 +32,29 @@ import java.nio.file.Paths;
 import java.util.List;
 import java.util.Scanner;
 
-public class RagNaif {
+public class Test2Logging {
+    private static void configureLogger() {
+        // Configure le logger sous-jacent (java.util.logging)
+        Logger packageLogger = Logger.getLogger("dev.langchain4j");
+        packageLogger.setLevel(Level.FINE); // plus verbeux que INFO
+
+        // Handler console
+        ConsoleHandler handler = new ConsoleHandler();
+        handler.setLevel(Level.FINE);
+
+        // Pour éviter de dupliquer les logs
+        packageLogger.setUseParentHandlers(false);
+        packageLogger.addHandler(handler);
+    }
+
 
     public static void main(String[] args) throws URISyntaxException {
+
+        // ---------------------------------------------------------
+        // 0) Configuration du logger.
+        // ---------------------------------------------------------
+
+        configureLogger();
 
         // ---------------------------------------------------------
         // 0) Création du ChatModel (comme dans le TP2)
@@ -39,6 +64,7 @@ public class RagNaif {
                 .apiKey(apiKey)
                 .modelName("gemini-2.5-flash") // ou gemini-2.5-flash si dispo
                 .temperature(0.3)
+                .logRequestsAndResponses(true)
                 .build();
 
         // ---------------------------------------------------------
