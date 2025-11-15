@@ -1,5 +1,22 @@
 package ma.emsi.dhissiayman.tp3.test;
 
+/**
+ * TP4 - Test 5 : RAG hybride (PDF + Web) avec Tavily
+ * Auteur : DHISSI AYMAN
+ *
+ * Objectif :
+ *  - Reprendre le RAG naïf basé sur un PDF (langchain4j.pdf)
+ *  - Ajouter une recherche Web via Tavily (WebSearchEngine)
+ *  - Combiner les deux sources avec un DefaultQueryRouter
+ *  - Construire un RetrievalAugmentor qui interroge :
+ *      • le contenu du PDF (RAG classique)
+ *      • des sources Web (via Tavily)
+ *
+ * Remarque :
+ *  - La clé Tavily doit être définie dans la variable d'environnement TAVILY_API_KEY
+ *  - La clé Gemini doit être définie dans GEMINI_KEY
+ */
+
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentParser;
 import dev.langchain4j.data.document.loader.FileSystemDocumentLoader;
@@ -40,7 +57,11 @@ import java.util.logging.Logger;
 
 public class Test5RagWeb {
 
-    // ---------- Logging LangChain4j ----------
+    /**
+     * Configure le logger Java pour voir :
+     *  - les logs internes de LangChain4j
+     *  - les requêtes / réponses HTTP liées à Gemini et Tavily
+     */
     private static void configureLogger() {
         Logger packageLogger = Logger.getLogger("dev.langchain4j");
         packageLogger.setLevel(Level.FINE);
@@ -54,10 +75,14 @@ public class Test5RagWeb {
 
     public static void main(String[] args) throws URISyntaxException {
 
-        // 0) Logging
+        // ---------------------------------------------------------
+        // 0) Activation du logging
+        // ---------------------------------------------------------
         configureLogger();
 
-        // 1) ChatModel Gemini (comme avant)
+        // ---------------------------------------------------------
+        // 1) ChatModel Gemini (LLM principal)
+        // ---------------------------------------------------------
         String geminiKey = System.getenv("GEMINI_KEY");
         if (geminiKey == null) {
             throw new IllegalStateException("La variable d'environnement GEMINI_KEY n'est pas définie");
@@ -71,7 +96,7 @@ public class Test5RagWeb {
                 .build();
 
         // ---------------------------------------------------------
-        // PHASE 1 : RAG naïf sur le PDF (comme Test1/RagNaif)
+        // PHASE 1 : RAG naïf sur le PDF (comme dans RagNaif)
         // ---------------------------------------------------------
 
         URL resource = Test5RagWeb.class.getClassLoader().getResource("langchain4j.pdf");
@@ -80,28 +105,31 @@ public class Test5RagWeb {
         }
         Path pdfPath = Paths.get(resource.toURI());
 
+        // Lecture du PDF
         DocumentParser parser = new ApacheTikaDocumentParser();
         Document document = FileSystemDocumentLoader.loadDocument(pdfPath, parser);
 
+        // Découpage en segments
         DocumentSplitter splitter = DocumentSplitters.recursive(500, 50);
         List<TextSegment> segments = splitter.split(document);
 
+        // Calcul des embeddings
         EmbeddingModel embeddingModel = new AllMiniLmL6V2EmbeddingModel();
-
         Response<List<Embedding>> response = embeddingModel.embedAll(segments);
         List<Embedding> embeddings = response.content();
 
+        // Stockage dans un EmbeddingStore en mémoire
         EmbeddingStore<TextSegment> embeddingStore = new InMemoryEmbeddingStore<>();
         embeddingStore.addAll(embeddings, segments);
 
-        System.out.println("Phase 1 terminée : " +
-                segments.size() + " segments enregistrés dans le magasin d'embeddings.");
+        System.out.println("Phase 1 terminée : "
+                + segments.size() + " segments enregistrés dans le magasin d'embeddings.");
 
         // ---------------------------------------------------------
         // PHASE 2 : ajout d'un ContentRetriever Web (Tavily) + QueryRouter
         // ---------------------------------------------------------
 
-        // 2.1 ContentRetriever sur le PDF (déjà vu)
+        // 2.1 ContentRetriever sur le PDF (RAG local)
         ContentRetriever pdfRetriever =
                 EmbeddingStoreContentRetriever.builder()
                         .embeddingStore(embeddingStore)
@@ -110,7 +138,7 @@ public class Test5RagWeb {
                         .minScore(0.5)
                         .build();
 
-        // 2.2 WebSearchEngine Tavily
+        // 2.2 WebSearchEngine Tavily (recherche Web externe)
         String tavilyKey = System.getenv("TAVILY_API_KEY");
         if (tavilyKey == null) {
             throw new IllegalStateException("La variable d'environnement TAVILY_API_KEY n'est pas définie");
@@ -124,21 +152,21 @@ public class Test5RagWeb {
         ContentRetriever webRetriever =
                 WebSearchContentRetriever.builder()
                         .webSearchEngine(tavilyEngine)
-                        // tu peux ajouter d'autres options si tu veux (maxResults, etc.)
+                        // Possibilité d'ajouter des options (maxResults, etc.) si nécessaire
                         .build();
 
-        // 2.4 QueryRouter qui utilise les 2 ContentRetrievers
-        // DefaultQueryRouter appelle tous les retrievers fournis
+        // 2.4 QueryRouter qui combine les 2 retrievers (PDF + Web)
+        // DefaultQueryRouter interroge tous les ContentRetrievers fournis.
         QueryRouter queryRouter = new DefaultQueryRouter(pdfRetriever, webRetriever);
 
-        // 2.5 RetrievalAugmentor avec ce QueryRouter
+        // 2.5 RetrievalAugmentor basé sur ce QueryRouter
         RetrievalAugmentor retrievalAugmentor =
                 DefaultRetrievalAugmentor.builder()
                         .queryRouter(queryRouter)
                         .build();
 
         // ---------------------------------------------------------
-        // Assistant avec RAG (PDF + Web) + mémoire
+        // 3) Assistant avec RAG hybride (PDF + Web) + mémoire
         // ---------------------------------------------------------
         Assistant assistant =
                 AiServices.builder(Assistant.class)
@@ -148,12 +176,12 @@ public class Test5RagWeb {
                         .build();
 
         // ---------------------------------------------------------
-        // Boucle de test
+        // 4) Boucle de test interactive
         // ---------------------------------------------------------
-        System.out.println("===== Test 5 - RAG avec récupération Web (Tavily) =====");
+        System.out.println("===== Test 5 - RAG avec récupération Web (Tavily) - DHISSI AYMAN =====");
         System.out.println("Exemples de questions à tester :");
         System.out.println("- \"Qu'est-ce que le RAG ?\" (devrait utiliser surtout le PDF)");
-        System.out.println("- \"Quelle est la dernière version de LangChain4j ?\" (devrait aller sur le Web)");
+        System.out.println("- \"Quelle est la dernière version de LangChain4j ?\" (devrait interroger le Web)");
         System.out.println("- \"Qui est le créateur de LangChain4j ?\"");
         System.out.println("Tapez 'fin' pour quitter.");
         System.out.println("========================================================");
@@ -162,6 +190,7 @@ public class Test5RagWeb {
             while (true) {
                 System.out.println("\nVotre question : ");
                 String question = scanner.nextLine();
+
                 if ("fin".equalsIgnoreCase(question)) {
                     break;
                 }
@@ -177,4 +206,3 @@ public class Test5RagWeb {
         }
     }
 }
-
