@@ -1,5 +1,20 @@
 package ma.emsi.dhissiayman.tp3.test;
 
+/**
+ * TP4 - Test 3 : Routage des requêtes entre plusieurs sources (RAG multi-documents)
+ * Auteur : DHISSI AYMAN
+ *
+ * Objectif :
+ *  - Ingestion de 2 documents distincts (2 PDF) dans 2 EmbeddingStores séparés
+ *  - Création de 2 ContentRetrievers : un pour chaque source
+ *  - Utilisation d’un LanguageModelQueryRouter pour choisir la bonne source
+ *  - Construction d’un RetrievalAugmentor basé sur ce routage
+ *
+ * Idée :
+ *  Le LLM reçoit une description en langage naturel de chaque source
+ *  (Map<ContentRetriever, String>), et décide quel ContentRetriever utiliser
+ *  en fonction de la question.
+ */
 
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentParser;
@@ -39,7 +54,10 @@ import java.util.logging.Logger;
 
 public class Test3Routage {
 
-    // ---------- LOGGING POUR VOIR LE ROUTAGE ----------
+    /**
+     * Configuration du logger pour afficher les détails de LangChain4j,
+     * notamment le routage des requêtes et les appels au LLM.
+     */
     private static void configureLogger() {
         Logger packageLogger = Logger.getLogger("dev.langchain4j");
         packageLogger.setLevel(Level.FINE);
@@ -51,7 +69,18 @@ public class Test3Routage {
         packageLogger.addHandler(handler);
     }
 
-    // ---------- MÉTHODE UTILITAIRE : INGESTION D'UN PDF ----------
+    /**
+     * Ingestion d’un PDF :
+     *  - Chargement du fichier dans les resources (classpath)
+     *  - Parsing via Apache Tika
+     *  - Découpage en TextSegments
+     *  - Calcul des embeddings
+     *  - Stockage dans un EmbeddingStore en mémoire
+     *
+     * @param resourceName  nom du fichier PDF dans /resources
+     * @param embeddingModel modèle d'embedding à utiliser
+     * @return EmbeddingStore contenant les segments + embeddings
+     */
     private static EmbeddingStore<TextSegment> ingestPdfAsEmbeddingStore(
             String resourceName,
             EmbeddingModel embeddingModel) throws URISyntaxException {
@@ -81,10 +110,16 @@ public class Test3Routage {
 
     public static void main(String[] args) throws URISyntaxException {
 
-        // 0) Logging détaillé LangChain4j (pour voir le routage)
+        // ---------------------------------------------------------
+        // 0) Activation du logging détaillé (LangChain4j + HTTP)
+        // ---------------------------------------------------------
         configureLogger();
 
-        // 1) ChatModel Gemini
+        // ---------------------------------------------------------
+        // 1) Création du ChatModel Gemini (utilisé pour :
+        //    - répondre aux questions
+        //    - faire le routage via LanguageModelQueryRouter)
+        // ---------------------------------------------------------
         String apiKey = System.getenv("GEMINI_KEY");
         ChatModel chatModel = GoogleAiGeminiChatModel.builder()
                 .apiKey(apiKey)
@@ -93,14 +128,16 @@ public class Test3Routage {
                 .logRequestsAndResponses(true)
                 .build();
 
-        // 2) Modèle d'embedding partagé
+        // ---------------------------------------------------------
+        // 2) Modèle d'embeddings partagé par les 2 sources
+        // ---------------------------------------------------------
         EmbeddingModel embeddingModel = new AllMiniLmL6V2EmbeddingModel();
 
         // ---------------------------------------------------------
-        // PHASE 1 : Ingestion des 2 documents dans 2 EmbeddingStores
+        // PHASE 1 : ingestion de 2 documents dans 2 EmbeddingStores
         // ---------------------------------------------------------
 
-        // Fichier 1 : cours IA / RAG
+        // Fichier 1 : support de cours IA / RAG / LangChain4j
         EmbeddingStore<TextSegment> iaStore =
                 ingestPdfAsEmbeddingStore("langchain4j.pdf", embeddingModel);
 
@@ -112,7 +149,7 @@ public class Test3Routage {
         // PHASE 2 : 2 ContentRetrievers + QueryRouter + RetrievalAugmentor
         // ---------------------------------------------------------
 
-        // 2 ContentRetrievers, un par source
+        // ContentRetriever pour la source IA
         ContentRetriever iaRetriever =
                 EmbeddingStoreContentRetriever.builder()
                         .embeddingStore(iaStore)
@@ -121,6 +158,7 @@ public class Test3Routage {
                         .minScore(0.5)
                         .build();
 
+        // ContentRetriever pour l’autre source
         ContentRetriever autreRetriever =
                 EmbeddingStoreContentRetriever.builder()
                         .embeddingStore(autreStore)
@@ -129,25 +167,29 @@ public class Test3Routage {
                         .minScore(0.5)
                         .build();
 
-        // Map<ContentRetriever, String> pour décrire chaque source au LM
+        // Map<ContentRetriever, String> : description en langage naturel
+        // de chaque source, lue par le LLM pour choisir la route.
         Map<ContentRetriever, String> retrieverToDescription = Map.of(
-                iaRetriever, "Documents de cours sur l'IA, les LLM, le RAG, LangChain4j, etc.",
-                autreRetriever, "Documents qui ne parlent pas d'IA (autres matières / autres sujets)."
+                iaRetriever,
+                "Documents de cours sur l'IA, les LLM, le RAG, LangChain4j, etc.",
+                autreRetriever,
+                "Documents qui ne parlent pas directement d'IA (autres matières / autres sujets)."
         );
 
-        // QueryRouter basé sur le LLM (LanguageModelQueryRouter)
+        // QueryRouter basé sur le LLM :
+        // Le LLM lit la question + les descriptions et décide quel retriever utiliser.
         QueryRouter queryRouter = LanguageModelQueryRouter.builder()
                 .chatModel(chatModel)
                 .retrieverToDescription(retrieverToDescription)
                 .build();
 
-        // RetrievalAugmentor utilisant ce QueryRouter
+        // RetrievalAugmentor qui s'appuie sur ce QueryRouter
         RetrievalAugmentor retrievalAugmentor = DefaultRetrievalAugmentor.builder()
                 .queryRouter(queryRouter)
                 .build();
 
         // ---------------------------------------------------------
-        // Assistant avec RetrievalAugmentor (et mémoire 10 messages)
+        // Assistant avec RetrievalAugmentor + mémoire (10 messages)
         // ---------------------------------------------------------
         Assistant assistant =
                 AiServices.builder(Assistant.class)
@@ -157,20 +199,21 @@ public class Test3Routage {
                         .build();
 
         // ---------------------------------------------------------
-        // Tests interactifs (et observation du routage dans les logs)
+        // Boucle de tests interactifs (vérifier le routage via les logs)
         // ---------------------------------------------------------
-        System.out.println("===== Test routage RAG (2 sources) =====");
+        System.out.println("===== Test 3 - Routage RAG (2 sources) - DHISSI AYMAN =====");
         System.out.println("Exemples de questions à essayer :");
-        System.out.println("- \"Qu'est-ce que le RAG ?\"");
-        System.out.println("- \"Explique-moi ce qu'est une collection en Java\" (si ton 2e PDF parle de Java)");
+        System.out.println("- \"Qu'est-ce que le RAG ?\" (devrait aller vers le cours IA)");
+        System.out.println("- \"Explique-moi ce qu'est une collection en Java\" (si présent dans le 2e PDF)");
         System.out.println("- \"À quoi sert LangChain4j ?\"");
         System.out.println("Tapez 'fin' pour quitter.");
-        System.out.println("========================================");
+        System.out.println("============================================================");
 
         try (Scanner scanner = new Scanner(System.in)) {
             while (true) {
                 System.out.println("\nVotre question : ");
                 String question = scanner.nextLine();
+
                 if ("fin".equalsIgnoreCase(question)) {
                     break;
                 }
@@ -186,4 +229,3 @@ public class Test3Routage {
         }
     }
 }
-

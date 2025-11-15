@@ -1,5 +1,22 @@
 package ma.emsi.dhissiayman.tp3.test;
 
+/**
+ * TP4 - Test 4 : RAG conditionnel ("Pas de RAG" sur certaines requêtes)
+ * Auteur : DHISSI AYMAN
+ *
+ * Objectif :
+ *  - Utiliser un seul PDF (support RAG) pour le RAG
+ *  - Créer un QueryRouter personnalisé qui décide :
+ *      • d’utiliser le RAG si la question porte sur l’IA / le cours
+ *      • de NE PAS utiliser le RAG pour les questions générales (ex : “Bonjour”)
+ *  - Poser la question de routage via un PromptTemplate au LLM
+ *
+ * Le LLM répond uniquement par :
+ *  - "oui"    → RAG utilisé
+ *  - "peut-être" → RAG utilisé
+ *  - "non"    → RAG désactivé (pas de récupération de contexte)
+ */
+
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentParser;
 import dev.langchain4j.data.document.loader.FileSystemDocumentLoader;
@@ -41,6 +58,11 @@ import java.util.logging.Logger;
 public class Test4PasDeRag {
 
     // ---------- LOGGING LANGCHAIN4J (comme dans Test2Logging) ----------
+    /**
+     * Configuration du logger pour afficher :
+     *  - les détails internes de LangChain4j
+     *  - les requêtes / réponses HTTP vers Gemini
+     */
     private static void configureLogger() {
         Logger packageLogger = Logger.getLogger("dev.langchain4j");
         packageLogger.setLevel(Level.FINE);
@@ -53,6 +75,14 @@ public class Test4PasDeRag {
     }
 
     // ---------- PHASE 1 : ingestion d'un seul PDF dans un EmbeddingStore ----------
+    /**
+     * Charge un PDF depuis le classpath, le découpe en segments,
+     * calcule leurs embeddings et les enregistre dans un EmbeddingStore en mémoire.
+     *
+     * @param resourceName   nom du fichier dans src/main/resources
+     * @param embeddingModel modèle d’embeddings à utiliser
+     * @return EmbeddingStore contenant tous les segments + embeddings
+     */
     private static EmbeddingStore<TextSegment> ingestRagPdf(
             String resourceName,
             EmbeddingModel embeddingModel) throws URISyntaxException {
@@ -82,24 +112,32 @@ public class Test4PasDeRag {
 
     public static void main(String[] args) throws URISyntaxException {
 
-        // 0) Logging détaillé
+        // ---------------------------------------------------------
+        // 0) Activation du logging détaillé
+        // ---------------------------------------------------------
         configureLogger();
 
-        // 1) ChatModel Gemini (utilisé à la fois pour l'assistant et pour le routage)
+        // ---------------------------------------------------------
+        // 1) ChatModel Gemini (utilisé pour l'assistant ET le routage)
+        // ---------------------------------------------------------
         String apiKey = System.getenv("GEMINI_KEY");
         ChatModel chatModel = GoogleAiGeminiChatModel.builder()
                 .apiKey(apiKey)
                 .modelName("gemini-2.5-flash")
                 .temperature(0.3)
-                .logRequestsAndResponses(true)   // pour bien voir ce qui se passe
+                .logRequestsAndResponses(true)   // pour voir les requêtes/réponses brutes
                 .build();
 
+        // ---------------------------------------------------------
         // 2) Modèle d'embeddings + ingestion du support RAG
+        // ---------------------------------------------------------
         EmbeddingModel embeddingModel = new AllMiniLmL6V2EmbeddingModel();
         EmbeddingStore<TextSegment> embeddingStore =
                 ingestRagPdf("langchain4j.pdf", embeddingModel); // support de cours RAG
 
+        // ---------------------------------------------------------
         // 3) ContentRetriever basé sur ce seul EmbeddingStore
+        // ---------------------------------------------------------
         ContentRetriever contentRetriever =
                 EmbeddingStoreContentRetriever.builder()
                         .embeddingStore(embeddingStore)
@@ -108,19 +146,23 @@ public class Test4PasDeRag {
                         .minScore(0.5)
                         .build();
 
-        // 4) PromptTemplate pour décider "RAG ou pas"
+        // ---------------------------------------------------------
+        // 4) PromptTemplate utilisé pour décider "RAG ou pas ?"
+        // ---------------------------------------------------------
         PromptTemplate routerTemplate = PromptTemplate.from(
                 "Est-ce que la requête suivante porte sur l'IA ou le contenu du cours LangChain4j ? " +
                         "Réponds seulement par 'oui', 'non' ou 'peut-être'.\n" +
                         "Requête : {{query}}"
         );
 
-        // 5) QueryRouter personnalisé : "utiliser le RAG ou pas ?"
+        // ---------------------------------------------------------
+        // 5) QueryRouter personnalisé : utiliser le RAG ou pas
+        // ---------------------------------------------------------
         QueryRouter queryRouter = new QueryRouter() {
             @Override
             public List<ContentRetriever> route(Query query) {
 
-                // On construit le Prompt à partir du template
+                // Construction du Prompt à partir du template + texte de la requête
                 Prompt prompt = routerTemplate.apply(Map.of(
                         "query", query.text()
                 ));
@@ -128,25 +170,29 @@ public class Test4PasDeRag {
                 // On interroge directement le ChatModel avec le texte du Prompt
                 String answer = chatModel.chat(prompt.text()).trim().toLowerCase();
 
-                System.out.println("[Router] Question : " + query.text());
+                System.out.println("[Router] Question utilisateur : " + query.text());
                 System.out.println("[Router] Réponse du LM pour le routage : " + answer);
 
                 if (answer.startsWith("non")) {
-                    // ❌ La requête ne porte pas sur l'IA → pas de RAG
+                    // ❌ La requête ne porte pas sur l'IA → on désactive le RAG
                     return List.of();
                 } else {
-                    // ✅ "oui" ou "peut-être" → on utilise le ContentRetriever
+                    // ✅ "oui" ou "peut-être" → on active le RAG (ContentRetriever utilisé)
                     return List.of(contentRetriever);
                 }
             }
         };
 
+        // ---------------------------------------------------------
         // 6) RetrievalAugmentor utilisant ce QueryRouter
+        // ---------------------------------------------------------
         RetrievalAugmentor retrievalAugmentor = DefaultRetrievalAugmentor.builder()
                 .queryRouter(queryRouter)
                 .build();
 
+        // ---------------------------------------------------------
         // 7) Assistant avec RetrievalAugmentor (et mémoire de 10 messages)
+        // ---------------------------------------------------------
         Assistant assistant =
                 AiServices.builder(Assistant.class)
                         .chatModel(chatModel)
@@ -154,14 +200,16 @@ public class Test4PasDeRag {
                         .retrievalAugmentor(retrievalAugmentor)
                         .build();
 
-        // 8) Boucle de test : d'abord "Bonjour", puis une vraie question IA
-        System.out.println("===== Test 4 - Pas de RAG =====");
+        // ---------------------------------------------------------
+        // 8) Boucle de test : d’abord "Bonjour", puis une question IA
+        // ---------------------------------------------------------
+        System.out.println("===== Test 4 - Pas de RAG (DHISSI AYMAN) =====");
         System.out.println("Exemples à tester :");
-        System.out.println("- \"Bonjour\"");
-        System.out.println("- \"Qu'est-ce que le RAG ?\"");
+        System.out.println("- \"Bonjour\"  (devrait répondre sans RAG)");
+        System.out.println("- \"Qu'est-ce que le RAG ?\"  (devrait utiliser le RAG)");
         System.out.println("- \"À quoi sert LangChain4j ?\"");
         System.out.println("Tapez 'fin' pour quitter.");
-        System.out.println("================================");
+        System.out.println("===============================================");
 
         try (Scanner scanner = new Scanner(System.in)) {
             while (true) {
